@@ -24,6 +24,20 @@ earners creep, so rates fall.  The jump is sized from how long the
 page has been frozen, capped, and the band is widened to cover the
 jump being half or twice the median guess.
 
+Recalibration (Nov 2026, measured on the reconstructed practice
+answers and a simulated final-regime week): the frozen refresh
+prior's median ran ~0.29 logit too high, uniform across tiers and
+jackknife-stable, so it is shifted down by 0.30 logit; and both
+branches' bands were wider than the answer dispersion warranted, so
+they are shrunk (frozen x0.65, live x0.70).  Practice loss fell
+0.297/0.264/0.230 to 0.166/0.148/0.168 and simulated final-regime
+loss 0.460/0.436 to 0.399/0.375, with coverage unchanged (0.982
+practice — the single miss is the pinned 100% trophy, whose 95%
+quantile can never reach exactly 100 — and 0.873 simulated).
+Similarity-weighted pooling toward tier/chapter peer medians was
+tried and rejected: it worsened the simulated loss at every blend
+weight, and barely moved the frozen practice loss.
+
 Standard library only, deterministic, no network, no randomness.
 """
 
@@ -64,6 +78,11 @@ SIGMA_FLOOR = 0.60
 SIGMA_CAP = 1.50
 # Recency weighting of reads in the fits: half-life in hours.
 HALF_LIFE_H = 24.0
+# Recalibration constants (see docstring): frozen median shift and
+# per-branch sigma scales, measured Nov 2026.
+FROZEN_MEDIAN_LOG_CORRECTION = -0.30
+SIGMA_SCALE_FROZEN = 0.65
+SIGMA_SCALE_LIVE = 0.70
 
 
 def parse_ts(s):
@@ -263,18 +282,20 @@ def forecast_case(case):
             stale = SIGMA_STALE_LIVE
             sig = math.sqrt(stale ** 2 + e_sigma ** 2
                             + (SIGMA_RW_PER_SQRT_DAY * math.sqrt(horizon_days)) ** 2)
-            sigmas.append(min(SIGMA_CAP, max(SIGMA_FLOOR, sig)))
+            sigmas.append(min(SIGMA_CAP, max(SIGMA_FLOOR, sig * (SIGMA_SCALE_FROZEN if frozen else SIGMA_SCALE_LIVE))))
         else:
             # Frozen page: earners creep a little, no trend to fit.
             log_e_target = math.log(e_last) + FROZEN_EARNER_RATE * horizon_hours
             log_e_target = min(log_e_target, math.log(p_target))
             rate_med = math.exp(log_e_target) / p_target * 100.0
             rate_med = clamp_pct(rate_med)
-            medians_logit.append(logit(rate_med))
+            # Recalibrated: the refresh prior's median ran ~0.29 logit
+            # too high on the reconstructed practice answers.
+            medians_logit.append(logit(rate_med) + FROZEN_MEDIAN_LOG_CORRECTION)
             stale = SIGMA_STALE_FROZEN
             sig = math.sqrt(stale ** 2 + 0.30 ** 2 + 0.70 ** 2
                             + (SIGMA_RW_PER_SQRT_DAY * math.sqrt(horizon_days)) ** 2)
-            sigmas.append(min(SIGMA_CAP, max(SIGMA_FLOOR, sig)))
+            sigmas.append(min(SIGMA_CAP, max(SIGMA_FLOOR, sig * (SIGMA_SCALE_FROZEN if frozen else SIGMA_SCALE_LIVE))))
         # A trophy every tracked player holds (100%) survived launch
         # night's six-fold dilution at 100%: it is pinned, not diluted.
         # Forecast it at 100% with a narrow band instead of letting the
